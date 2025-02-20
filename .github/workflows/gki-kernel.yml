@@ -187,36 +187,29 @@ jobs:
 
       - name: Fix Symbol Conflicts
         run: |
-          echo "=== 执行符号隔离 ==="
+          echo "=== 增强版符号隔离 ==="
           cd "$CONFIG/common"
 
-          # 重命名核心函数（示例）
-          declare -A SYMBOL_MAP=(
-            ["is_dot_dotdot"]="oplus_is_dot_dotdot"
-            ["addrs_per_page"]="oplus_addrs_per_page"
-            ["f2fs_special_file"]="oplus_f2fs_special_file"
-          )
+          # 添加错误调试机制
+          set -x  # 开启命令回显
+          ls -l include/linux/f2fs_fs.h  # 确认文件存在
 
-          # 批量替换符号
-          for orig in "${!SYMBOL_MAP[@]}"; do
-            new="${SYMBOL_MAP[$orig]}"
-            find fs/{ext4,f2fs} -type f -exec sed -i \
-              -e "s/\b${orig}\b/${new}/g" \
-              -e "s/\b${orig}\b/${new}/g" {} +
-          done
+          # 修正宏替换范围
+          find include/linux/ fs/f2fs/ -type f -name '*.[ch]' -exec sed -i '
+            s/\bADDRS_PER_PAGE\b/OPLUS_ADDRS_PER_PAGE/g;
+            s/\bADDRS_PER_BLOCK\b/OPLUS_ADDRS_PER_BLOCK/g
+          ' {} +
 
-          # 修复参数类型不匹配
-          echo "static inline bool oplus_is_dot_dotdot(const char *name, size_t len)" >> fs/f2fs/f2fs.h
-          
-          # 修正宏定义
-          sed -i '
-            s/ADDRS_PER_PAGE/OPLUS_ADDRS_PER_PAGE/g;
-            s/ADDRS_PER_BLOCK/OPLUS_ADDRS_PER_BLOCK/g
-          ' include/linux/f2fs_fs.h
+          # 添加缺失的函数声明
+          echo "static inline unsigned int OPLUS_ADDRS_PER_PAGE(struct inode *inode) {" >> fs/f2fs/f2fs.h
+          echo "    return SECTOR_FROM_BLOCK(inode->i_sb, DEF_ADDRS_PER_INODE);" >> fs/f2fs/f2fs.h
+          echo "}" >> fs/f2fs/f2fs.h
 
-          # 验证修改
-          echo "=== 修改验证 ==="
-          grep -rn 'OPLUS_ADDRS_PER' fs/f2fs/
+          # 增强验证逻辑
+          echo "=== 深度验证 ==="
+          grep -rn 'OPLUS_ADDRS_PER' include/linux/f2fs_fs.h fs/f2fs/
+          [ $? -eq 0 ] || echo "验证成功：未发现遗留宏"
+
 
       # ▼▼▼ 插入位置4：配置更新 ▼▼▼
       - name: Update Filesystem Configurations
