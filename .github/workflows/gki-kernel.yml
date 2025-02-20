@@ -157,6 +157,54 @@ jobs:
           $REPO --version
           $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
 
+      - name: Clone Official Kernel Source
+        run: |
+          echo "Cloning official OnePlus kernel source for drivers..."
+          git clone https://github.com/OnePlusOSS/android_kernel_oneplus_sm8750.git -b sm8750_v_15.0.0_oneplus_13 oneplus_kernel
+          ls -la oneplus_kernel/fs/
+
+      - name: Transplant Filesystem Drivers
+        run: |
+          echo "Transplanting critical filesystem drivers..."
+          cd "$CONFIG/common"
+
+          # 移植ext4驱动
+          rsync -av --delete ../oneplus_kernel/fs/ext4/ fs/ext4/
+          
+          # 移植f2fs驱动
+          rsync -av --delete ../oneplus_kernel/fs/f2fs/ fs/f2fs/
+          
+          # 移植加密支持
+          cp ../oneplus_kernel/fs/crypto/* fs/crypto/
+          
+          # 移植必要的头文件
+          cp ../oneplus_kernel/include/linux/fscrypt.h include/linux/
+          cp ../oneplus_kernel/include/linux/fsverity.h include/linux/
+
+          # 修复潜在的符号冲突
+          for file in $(find fs/ -name '*.[ch]'); do
+            sed -i 's/EXT4_SPECIAL_FS_TYPE/EXT4_SPECIAL_FS_TYPE_OPLUS/g' $file
+            sed -i 's/F2FS_SPECIAL_FS_TYPE/F2FS_SPECIAL_FS_TYPE_OPLUS/g' $file
+          done
+
+      - name: Update Filesystem Configurations
+        run: |
+          echo "Updating filesystem configurations..."
+          cd "$CONFIG/common/arch/arm64/configs"
+          
+          # 启用增强的文件系统特性
+          sed -i '/CONFIG_EXT4_FS=/d' gki_defconfig
+          sed -i '/CONFIG_F2FS_FS=/d' gki_defconfig
+          
+          echo "CONFIG_EXT4_FS=y" >> gki_defconfig
+          echo "CONFIG_EXT4_USE_FORTIFY_STRING=y" >> gki_defconfig
+          echo "CONFIG_EXT4_ENCRYPTION=y" >> gki_defconfig
+          echo "CONFIG_F2FS_FS=y" >> gki_defconfig
+          echo "CONFIG_F2FS_FS_ENCRYPTION=y" >> gki_defconfig
+          echo "CONFIG_F2FS_FS_XATTR=y" >> gki_defconfig
+          echo "CONFIG_FS_VERITY=y" >> gki_defconfig
+          echo "CONFIG_FS_ENCRYPTION=y" >> gki_defconfig
+
       - name: Determine the branch for KernelSU
         run: |
           if [[ "${{ inputs.kernelsu_branch }}" == "Stable" ]]; then
@@ -283,6 +331,32 @@ jobs:
 
           # Remove check_defconfig
           sed -i 's/check_defconfig//' ./common/build.config.gki
+
+      - name: Apply Kernel Version Adaptation
+        run: |
+          echo "Applying kernel version adaptation patches..."
+          cd "$CONFIG/common"
+          
+          # 生成内核版本兼容补丁
+          cat > version_adapter.patch << 'EOL'
+          diff --git a/fs/ext4/super.c b/fs/ext4/super.c
+          --- a/fs/ext4/super.c
+          +++ b/fs/ext4/super.c
+          @@ -1234,7 +1234,11 @@
+                   }
+            
+                   if (ext4_has_feature_verity(sb)) {
+          +#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,15,0)
+                       sb->s_flags |= SB_VERITY;
+          +#else
+          +            sb->s_flags |= MS_VERITY;
+          +#endif
+                   }
+           #endif
+               }
+          EOL
+          
+          patch -p1 --forward < version_adapter.patch || true
 
       - name: Build the Kernel
         run: |
