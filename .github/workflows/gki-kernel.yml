@@ -157,34 +157,6 @@ jobs:
           $REPO --version
           $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
 
-      
-          echo "移植后验证:"
-          tree -L 3 fs/ext4 fs/f2fs
-
-      - name: Fix Symbol Conflicts
-        run: |
-          echo "=== 智能符号冲突修复 ==="
-          cd "$CONFIG/common"
-
-          # 动态检测文件存在性
-          F2FS_FILES=()
-          for f in f2fs.h dir.c inline.h; do
-            if [ -f "fs/f2fs/$f" ]; then
-              F2FS_FILES+=( "fs/f2fs/$f" )
-            else
-              echo "注意: 文件 fs/f2fs/$f 不存在，跳过处理"
-            fi
-          done
-
-          # 仅处理实际存在的文件
-          if [ ${#F2FS_FILES[@]} -gt 0 ]; then
-            sed -i 's/\bis_dot_dotdot\b/oplus_is_dot_dotdot/g' "${F2FS_FILES[@]}"
-            sed -i 's/static inline bool is_dot_dotdot/static inline bool oplus_is_dot_dotdot/' fs/f2fs/f2fs.h
-          else
-            echo "错误：未找到任何F2FS文件！"
-            exit 1
-          fi
-
       - name: Clone Official Kernel Source
         run: |
           echo "克隆OnePlus官方内核源码..."
