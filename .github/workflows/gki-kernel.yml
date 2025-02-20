@@ -187,28 +187,39 @@ jobs:
 
       - name: Fix Symbol Conflicts
         run: |
-          echo "=== 增强版符号隔离 ==="
+          echo "=== 深度符号冲突修复 ==="
           cd "$CONFIG/common"
 
-          # 添加错误调试机制
-          set -x  # 开启命令回显
-          ls -l include/linux/f2fs_fs.h  # 确认文件存在
-
-          # 修正宏替换范围
-          find include/linux/ fs/f2fs/ -type f -name '*.[ch]' -exec sed -i '
-            s/\bADDRS_PER_PAGE\b/OPLUS_ADDRS_PER_PAGE/g;
-            s/\bADDRS_PER_BLOCK\b/OPLUS_ADDRS_PER_BLOCK/g
+          # 1. 完全重命名冲突函数
+          find fs/f2fs/ -type f -exec sed -i '
+            s/\bis_dot_dotdot\b/oplus_is_dot_dotdot/g;
+            s/\baddrs_per_page\b/oplus_addrs_per_page/g
           ' {} +
 
-          # 添加缺失的函数声明
-          echo "static inline unsigned int OPLUS_ADDRS_PER_PAGE(struct inode *inode) {" >> fs/f2fs/f2fs.h
-          echo "    return SECTOR_FROM_BLOCK(inode->i_sb, DEF_ADDRS_PER_INODE);" >> fs/f2fs/f2fs.h
-          echo "}" >> fs/f2fs/f2fs.h
+          # 2. 修正宏定义参数
+          sed -i '
+            s/OPLUS_ADDRS_PER_PAGE(page, inode)/oplus_addrs_per_page(inode)/g;
+            s/IS_INODE(page)/true/g
+          ' include/linux/f2fs_fs.h
 
-          # 增强验证逻辑
-          echo "=== 深度验证 ==="
-          grep -rn 'OPLUS_ADDRS_PER' include/linux/f2fs_fs.h fs/f2fs/
-          [ $? -eq 0 ] || echo "验证成功：未发现遗留宏"
+          # 3. 添加正确的函数实现
+          cat >> fs/f2fs/f2fs.h <<'EOL'
+          static inline unsigned int oplus_addrs_per_page(struct inode *inode)
+          {
+              return SECTOR_FROM_BLOCK(inode->i_sb, DEF_ADDRS_PER_INODE);
+          }
+          EOL
+
+          # 4. 统一参数类型
+          find fs/f2fs/ -type f -exec sed -i '
+            s/const u8 \*name/const char \*name/g;
+            s/name\[i\]/(unsigned char)name\[i\]/g
+          ' {} +
+
+          # 5. 验证修改
+          echo "=== 验证修复结果 ==="
+          grep -A3 'oplus_is_dot_dotdot' fs/f2fs/f2fs.h
+          grep 'OPLUS_ADDRS_PER_PAGE' include/linux/f2fs_fs.h
 
 
       # ▼▼▼ 插入位置4：配置更新 ▼▼▼
