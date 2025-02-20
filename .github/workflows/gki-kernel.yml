@@ -165,27 +165,37 @@ jobs:
 
       - name: Transplant Filesystem Drivers
         run: |
-          echo "Transplanting critical filesystem drivers..."
+          echo "精确路径验证..."
+          echo "工作区根目录: $GITHUB_WORKSPACE"
+          echo "官方内核路径: $GITHUB_WORKSPACE/oneplus_kernel/fs/ext4"
+          ls -la $GITHUB_WORKSPACE/oneplus_kernel/fs/ext4/
+
+          echo "开始移植文件系统驱动..."
           cd "$CONFIG/common"
 
-          # 移植ext4驱动
-          rsync -av --delete ../oneplus_kernel/fs/ext4/ fs/ext4/
-          
-          # 移植f2fs驱动
-          rsync -av --delete ../oneplus_kernel/fs/f2fs/ fs/f2fs/
-          
-          # 移植加密支持
-          cp ../oneplus_kernel/fs/crypto/* fs/crypto/
-          
-          # 移植必要的头文件
-          cp ../oneplus_kernel/include/linux/fscrypt.h include/linux/
-          cp ../oneplus_kernel/include/linux/fsverity.h include/linux/
+          # 使用工作区绝对路径确保准确性
+          rsync -av --delete \
+            $GITHUB_WORKSPACE/oneplus_kernel/fs/ext4/ \
+            fs/ext4/
 
-          # 修复潜在的符号冲突
-          for file in $(find fs/ -name '*.[ch]'); do
-            sed -i 's/EXT4_SPECIAL_FS_TYPE/EXT4_SPECIAL_FS_TYPE_OPLUS/g' $file
-            sed -i 's/F2FS_SPECIAL_FS_TYPE/F2FS_SPECIAL_FS_TYPE_OPLUS/g' $file
-          done
+          rsync -av --delete \
+            $GITHUB_WORKSPACE/oneplus_kernel/fs/f2fs/ \
+            fs/f2fs/
+
+          # 带校验的文件复制
+          echo "校验加密组件..."
+          cp -v $GITHUB_WORKSPACE/oneplus_kernel/fs/crypto/* fs/crypto/
+          [ -f fs/crypto/fscrypt_private.h ] || { echo "加密头文件缺失!"; exit 1; }
+
+          # 头文件同步带版本检测
+          KERNEL_VER=$(make kernelversion | cut -d. -f1-2)
+          echo "当前内核版本: $KERNEL_VER"
+          cp -v $GITHUB_WORKSPACE/oneplus_kernel/include/linux/fscrypt.h include/linux/
+          sed -i "s/MS_VERITY/SB_VERITY/g" include/linux/fscrypt.h  # 自动版本适配
+
+          echo "移植后验证:"
+          tree -L 3 fs/ext4 fs/f2fs
+
 
       - name: Update Filesystem Configurations
         run: |
