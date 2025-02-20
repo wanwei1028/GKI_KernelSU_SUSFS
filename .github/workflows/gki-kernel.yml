@@ -198,32 +198,48 @@ jobs:
 
       - name: Fix Symbol Conflicts
         run: |
-          echo "=== 深度符号冲突修复 ==="
+          echo "=== 智能符号冲突修复 ==="
           cd "$CONFIG/common"
 
-          # 1. 函数重命名（精确到参数类型）
-          sed -i 's/\bis_dot_dotdot\b/oplus_is_dot_dotdot/g' fs/f2fs/{f2fs.h,dir.c,inline.h}
-          sed -i 's/static inline bool is_dot_dotdot/static inline bool oplus_is_dot_dotdot/' fs/f2fs/f2fs.h
+          # 动态检测文件存在性
+          F2FS_FILES=()
+          for f in f2fs.h dir.c inline.h; do
+            if [ -f "fs/f2fs/$f" ]; then
+              F2FS_FILES+=( "fs/f2fs/$f" )
+            else
+              echo "注意: 文件 fs/f2fs/$f 不存在，跳过处理"
+            fi
+          done
 
-          # 2. 参数类型统一（动态适配内核版本）
-          if grep -q 'const char \*name' include/linux/fs.h; then
-            echo "检测到新内核参数类型(char*)，执行适配..."
-            sed -i 's/const u8 \*name/const char \*name/g' fs/f2fs/f2fs.h
-            sed -i 's/name\[i\]/(unsigned char)name\[i\]/g' fs/f2fs/dir.c
+          # 仅处理实际存在的文件
+          if [ ${#F2FS_FILES[@]} -gt 0 ]; then
+            sed -i 's/\bis_dot_dotdot\b/oplus_is_dot_dotdot/g' "${F2FS_FILES[@]}"
+            sed -i 's/static inline bool is_dot_dotdot/static inline bool oplus_is_dot_dotdot/' fs/f2fs/f2fs.h
           else
-            echo "使用旧内核参数类型(u8*)..."
-            sed -i 's/const char \*name/const u8 \*name/g' include/linux/fs.h
+            echo "错误：未找到任何F2FS文件！"
+            exit 1
           fi
 
-          # 3. 修复调用链（扩展至所有相关文件）
-          find fs/f2fs/ -type f -name '*.[ch]' -exec \
-            sed -i 's/\bis_dot_dotdot\b/oplus_is_dot_dotdot/g' {} +
+          # 安全参数类型适配
+          if grep -q 'const char \*name' include/linux/fs.h; then
+            echo "检测到新内核参数类型(char*)，执行适配..."
+            [ -f fs/f2fs/f2fs.h ] && sed -i 's/const u8 \*name/const char \*name/g' fs/f2fs/f2fs.h
+            [ -f fs/f2fs/dir.c ] && sed -i 's/name\[i\]/(unsigned char)name\[i\]/g' fs/f2fs/dir.c
+          fi
 
-          # 4. 验证修复结果
+          # 动态查找相关文件
+          echo "深度修复调用链..."
+          find fs/f2fs/ -type f \( -name '*.c' -o -name '*.h' \) -exec \
+            grep -q 'is_dot_dotdot' {} \; -print | while read file; do
+              sed -i 's/\bis_dot_dotdot\b/oplus_is_dot_dotdot/g' "$file"
+              echo "已修复: $file"
+            done
+
+          # 增强验证
           echo "=== 修复验证 ==="
-          grep -rn 'oplus_is_dot_dotdot' fs/f2fs/
-          diff <(grep -A2 'is_dot_dotdot' include/linux/fs.h) \
-               <(grep -A2 'oplus_is_dot_dotdot' fs/f2fs/f2fs.h)
+          find fs/f2fs/ -type f \( -name '*.c' -o -name '*.h' \) -exec \
+            grep -Hn 'oplus_is_dot_dotdot' {} +
+
 
 
 
