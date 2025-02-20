@@ -207,28 +207,23 @@ jobs:
 
           # 4. 修复ADDRS_PER_PAGE实现
           sed -i 's/return SECTOR_FROM_BLOCK(inode->i_sb, DEF_ADDRS_PER_INODE);/return DEF_ADDRS_PER_INODE << (inode->i_sb->s_blocksize_bits - 9);/' fs/f2fs/f2fs.h
-
+         
       - name: Apply Kernel Version Adaptation
         run: |
           echo "应用内核版本适配补丁..."
-          cd "$CONFIG/common"
-          
-          # 生成内核版本兼容补丁
-          cat > version_adapter.patch << 'EOL'
-          diff --git a/fs/f2fs/f2fs.h b/fs/f2fs/f2fs.h
-          --- a/fs/f2fs/f2fs.h
-          +++ b/fs/f2fs/f2fs.h
-          @@ -3379,7 +3379,7 @@
-           static inline bool is_extension_exist(const unsigned char *s, const char *sub);
-           
-           /* oplus special feature */
-          -static inline bool oplus_is_dot_dotdot(const u8 *name, size_t len)
-          +static inline bool oplus_is_dot_dotdot(const char *name, size_t len)
-           {
-                   return is_dot_dotdot(name, len);
-           }
-          EOL
-          patch -p1 < version_adapter.patch
+          cd "$CONFIG/common/fs/f2fs"
+    
+          # 使用sed直接修改参数类型
+          sed -i 's/static inline bool oplus_is_dot_dotdot(const u8 \*name, size_t len)/static inline bool oplus_is_dot_dotdot(const char \*name, size_t len)/' f2fs.h
+    
+          # 添加宏定义到文件末尾
+          echo -e "\n/* Added SECTOR_FROM_BLOCK macro */" >> f2fs.h
+          echo "#define SECTOR_FROM_BLOCK(sb, blk) ((blk) << (sb->s_blocksize_bits - 9))" >> f2fs.h
+    
+          # 验证修改
+          echo "=== 修改验证 ==="
+          grep -A2 'oplus_is_dot_dotdot' f2fs.h
+          grep 'SECTOR_FROM_BLOCK' f2fs.h
 
 
       # ▼▼▼ 插入位置4：配置更新 ▼▼▼
