@@ -161,7 +161,7 @@ jobs:
         run: |
           echo "克隆OnePlus官方内核源码..."
           git clone https://github.com/OnePlusOSS/android_kernel_oneplus_sm8750.git \
-            -b sm8750_v_15.0.0_oneplus_13 \
+            -b oneplus/sm8750_v_15.0.0_oneplus_13 \
             oneplus_kernel
           echo "验证文件系统结构..."
           ls -la oneplus_kernel/fs/{ext4,f2fs,crypto}
