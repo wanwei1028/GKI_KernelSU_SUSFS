@@ -157,42 +157,7 @@ jobs:
           $REPO --version
           $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
 
-      - name: Clone Official Kernel Source
-        run: |
-          echo "Cloning official OnePlus kernel source for drivers..."
-          git clone https://github.com/OnePlusOSS/android_kernel_oneplus_sm8750.git -b oneplus/sm8750_v_15.0.0_oneplus_13 oneplus_kernel
-          ls -la oneplus_kernel/fs/
-
-      - name: Transplant Filesystem Drivers
-        run: |
-          echo "精确路径验证..."
-          echo "工作区根目录: $GITHUB_WORKSPACE"
-          echo "官方内核路径: $GITHUB_WORKSPACE/oneplus_kernel/fs/ext4"
-          ls -la $GITHUB_WORKSPACE/oneplus_kernel/fs/ext4/
-
-          echo "开始移植文件系统驱动..."
-          cd "$CONFIG/common"
-
-          # 使用工作区绝对路径确保准确性
-          rsync -av --delete \
-            $GITHUB_WORKSPACE/oneplus_kernel/fs/ext4/ \
-            fs/ext4/
-
-          rsync -av --delete \
-            $GITHUB_WORKSPACE/oneplus_kernel/fs/f2fs/ \
-            fs/f2fs/
-
-          # 带校验的文件复制
-          echo "校验加密组件..."
-          cp -v $GITHUB_WORKSPACE/oneplus_kernel/fs/crypto/* fs/crypto/
-          [ -f fs/crypto/fscrypt_private.h ] || { echo "加密头文件缺失!"; exit 1; }
-
-          # 头文件同步带版本检测
-          KERNEL_VER=$(make kernelversion | cut -d. -f1-2)
-          echo "当前内核版本: $KERNEL_VER"
-          cp -v $GITHUB_WORKSPACE/oneplus_kernel/include/linux/fscrypt.h include/linux/
-          sed -i "s/MS_VERITY/SB_VERITY/g" include/linux/fscrypt.h  # 自动版本适配
-
+      
           echo "移植后验证:"
           tree -L 3 fs/ext4 fs/f2fs
 
@@ -220,23 +185,6 @@ jobs:
             exit 1
           fi
 
-          # 安全参数类型适配
-          if grep -q 'const char \*name' include/linux/fs.h; then
-            echo "检测到新内核参数类型(char*)，执行适配..."
-            [ -f fs/f2fs/f2fs.h ] && sed -i 's/const u8 \*name/const char \*name/g' fs/f2fs/f2fs.h
-            [ -f fs/f2fs/dir.c ] && sed -i 's/name\[i\]/(unsigned char)name\[i\]/g' fs/f2fs/dir.c
-          fi
-
-          # 动态查找相关文件
-          echo "深度修复调用链..."
-          find fs/f2fs/ -type f \( -name '*.c' -o -name '*.h' \) -exec \
-            grep -q 'is_dot_dotdot' {} \; -print | while read file; do
-              sed -i 's/\bis_dot_dotdot\b/oplus_is_dot_dotdot/g' "$file"
-              echo "已修复: $file"
-            done
-
-          # 增强验证
-          echo "=== 修复验证 ==="
       - name: Clone Official Kernel Source
         run: |
           echo "克隆OnePlus官方内核源码..."
@@ -440,31 +388,7 @@ jobs:
           # Remove check_defconfig
           sed -i 's/check_defconfig//' ./common/build.config.gki
 
-      - name: Apply Kernel Version Adaptation
-        run: |
-          echo "Applying kernel version adaptation patches..."
-          cd "$CONFIG/common"
-          
-          # 生成内核版本兼容补丁
-          cat > version_adapter.patch << 'EOL'
-          diff --git a/fs/ext4/super.c b/fs/ext4/super.c
-          --- a/fs/ext4/super.c
-          +++ b/fs/ext4/super.c
-          @@ -1234,7 +1234,11 @@
-                   }
-            
-                   if (ext4_has_feature_verity(sb)) {
-          +#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,15,0)
-                       sb->s_flags |= SB_VERITY;
-          +#else
-          +            sb->s_flags |= MS_VERITY;
-          +#endif
-                   }
-           #endif
-               }
-          EOL
-          
-          patch -p1 --forward < version_adapter.patch || true
+
 
       - name: Build the Kernel
         run: |
