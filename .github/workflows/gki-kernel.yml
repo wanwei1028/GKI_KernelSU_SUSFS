@@ -190,25 +190,45 @@ jobs:
           set -ex
           cd "$CONFIG/common"
 
-          # 1. 修复is_dot_dotdot冲突
-          sed -i 's/\bis_dot_dotdot\b/oplus_is_dot_dotdot/g' fs/f2fs/*.[ch]
-          echo "static inline bool oplus_is_dot_dotdot(const char *name, size_t len) { return is_dot_dotdot(name, len); }" >> fs/f2fs/f2fs.h
+          # 1. 添加SECTOR_FROM_BLOCK宏定义
+          echo "添加SECTOR_FROM_BLOCK宏..."
+          cat > include/linux/sector_macro.h << 'EOL'
+          #ifndef _LINUX_SECTOR_MACRO_H
+          #define _LINUX_SECTOR_MACRO_H
+          #define SECTOR_FROM_BLOCK(sb, blk) ((blk) << ((sb)->s_blocksize_bits - 9))
+          #endif
+          EOL
 
-          # 2. 修正ADDRS宏参数
-          sed -i 's/OPLUS_ADDRS_PER_PAGE(page, inode)/OPLUS_ADDRS_PER_PAGE(inode)/g' \
-            include/linux/f2fs_fs.h fs/f2fs/*.[ch]
+          # 2. 修正头文件包含关系
+          sed -i '/#include <linux\/fsverity.h>/a #include <linux/sector_macro.h>' fs/f2fs/f2fs.h
 
-          # 3. 修复函数声明
-          sed -i '/static inline unsigned int OPLUS_ADDRS_PER_PAGE/,/}/d' fs/f2fs/f2fs.h
-          echo "static inline unsigned int OPLUS_ADDRS_PER_PAGE(struct inode *inode) {" >> fs/f2fs/f2fs.h
-          echo "    return SECTOR_FROM_BLOCK(inode->i_sb, DEF_ADDRS_PER_INODE);" >> fs/f2fs/f2fs.h
-          echo "}" >> fs/f2fs/f2fs.h
+          # 3. 修复is_dot_dotdot冲突（保持原始参数类型）
+          sed -i 's/static inline bool oplus_is_dot_dotdot(const u8 \*name, size_t len)/static inline bool oplus_is_dot_dotdot(const char \*name, size_t len)/' fs/f2fs/f2fs.h
 
-          # 4. 验证修复
-          grep -rn 'oplus_is_dot_dotdot' fs/f2fs/
-          grep -rn 'OPLUS_ADDRS_PER_PAGE' fs/f2fs/
+          # 4. 修复ADDRS_PER_PAGE实现
+          sed -i 's/return SECTOR_FROM_BLOCK(inode->i_sb, DEF_ADDRS_PER_INODE);/return DEF_ADDRS_PER_INODE << (inode->i_sb->s_blocksize_bits - 9);/' fs/f2fs/f2fs.h
 
-
+      - name: Apply Kernel Version Adaptation
+        run: |
+          echo "应用内核版本适配补丁..."
+          cd "$CONFIG/common"
+          
+          # 生成内核版本兼容补丁
+          cat > version_adapter.patch << 'EOL'
+          diff --git a/fs/f2fs/f2fs.h b/fs/f2fs/f2fs.h
+          --- a/fs/f2fs/f2fs.h
+          +++ b/fs/f2fs/f2fs.h
+          @@ -3379,7 +3379,7 @@
+           static inline bool is_extension_exist(const unsigned char *s, const char *sub);
+           
+           /* oplus special feature */
+          -static inline bool oplus_is_dot_dotdot(const u8 *name, size_t len)
+          +static inline bool oplus_is_dot_dotdot(const char *name, size_t len)
+           {
+                   return is_dot_dotdot(name, len);
+           }
+          EOL
+          patch -p1 < version_adapter.patch
 
 
       # ▼▼▼ 插入位置4：配置更新 ▼▼▼
@@ -217,14 +237,10 @@ jobs:
           echo "更新文件系统配置..."
           cd "$CONFIG/common/arch/arm64/configs"
           
-          # 禁用GKI默认配置
-          sed -i '/CONFIG_EXT4_FS/d' gki_defconfig
-          sed -i '/CONFIG_F2FS_FS/d' gki_defconfig
-          
-          # 启用移植驱动配置
-          echo "CONFIG_EXT4_FS=y" >> gki_defconfig
-          echo "CONFIG_F2FS_FS=y" >> gki_defconfig
-          echo "CONFIG_OPLUS_FS=y" >> gki_defconfig
+          # 添加加密相关配置
+          echo "CONFIG_FS_ENCRYPTION=y" >> gki_defconfig
+          echo "CONFIG_F2FS_FS_ENCRYPTION=y" >> gki_defconfig
+          echo "CONFIG_EXT4_ENCRYPTION=y" >> gki_defconfig
 
       - name: Determine the branch for KernelSU
         run: |
