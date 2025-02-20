@@ -160,7 +160,7 @@ jobs:
       - name: Clone Official Kernel Source
         run: |
           echo "Cloning official OnePlus kernel source for drivers..."
-          git clone https://github.com/OnePlusOSS/android_kernel_oneplus_sm8750.git -b sm8750_v_15.0.0_oneplus_13 oneplus_kernel
+          git clone https://github.com/OnePlusOSS/android_kernel_oneplus_sm8750.git -b oneplus/sm8750_v_15.0.0_oneplus_13 oneplus_kernel
           ls -la oneplus_kernel/fs/
 
       - name: Transplant Filesystem Drivers
