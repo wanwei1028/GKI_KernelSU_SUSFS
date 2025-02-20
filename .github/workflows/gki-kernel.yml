@@ -196,6 +196,36 @@ jobs:
           echo "移植后验证:"
           tree -L 3 fs/ext4 fs/f2fs
 
+      - name: Fix Symbol Conflicts
+        run: |
+          echo "=== 深度符号冲突修复 ==="
+          cd "$CONFIG/common"
+
+          # 1. 函数重命名（精确到参数类型）
+          sed -i 's/\bis_dot_dotdot\b/oplus_is_dot_dotdot/g' fs/f2fs/{f2fs.h,dir.c,inline.h}
+          sed -i 's/static inline bool is_dot_dotdot/static inline bool oplus_is_dot_dotdot/' fs/f2fs/f2fs.h
+
+          # 2. 参数类型统一（动态适配内核版本）
+          if grep -q 'const char \*name' include/linux/fs.h; then
+            echo "检测到新内核参数类型(char*)，执行适配..."
+            sed -i 's/const u8 \*name/const char \*name/g' fs/f2fs/f2fs.h
+            sed -i 's/name\[i\]/(unsigned char)name\[i\]/g' fs/f2fs/dir.c
+          else
+            echo "使用旧内核参数类型(u8*)..."
+            sed -i 's/const char \*name/const u8 \*name/g' include/linux/fs.h
+          fi
+
+          # 3. 修复调用链（扩展至所有相关文件）
+          find fs/f2fs/ -type f -name '*.[ch]' -exec \
+            sed -i 's/\bis_dot_dotdot\b/oplus_is_dot_dotdot/g' {} +
+
+          # 4. 验证修复结果
+          echo "=== 修复验证 ==="
+          grep -rn 'oplus_is_dot_dotdot' fs/f2fs/
+          diff <(grep -A2 'is_dot_dotdot' include/linux/fs.h) \
+               <(grep -A2 'oplus_is_dot_dotdot' fs/f2fs/f2fs.h)
+
+
 
       - name: Update Filesystem Configurations
         run: |
