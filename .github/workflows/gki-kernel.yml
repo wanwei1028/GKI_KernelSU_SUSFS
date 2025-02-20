@@ -214,11 +214,18 @@ jobs:
           set -ex
           cd "$CONFIG/common/fs/f2fs"
         
-          # 步骤1：环境准备
-          cp f2fs.h f2fs.h.original
-          dos2unix f2fs.h  # 转换换行符
+          # 安装必要工具
+          echo "安装系统依赖..."
+          sudo apt-get update
+          sudo apt-get install -y dos2unix
         
-          # 步骤2：动态生成补丁
+          # 预处理文件
+          echo "转换文件格式..."
+          cp f2fs.h f2fs.h.original
+          dos2unix f2fs.h
+        
+          # 动态补丁生成和应用
+          echo "生成动态补丁..."
           cat > dynamic.patch << 'EOL'
           @@ -$(grep -n 'oplus_is_dot_dotdot' f2fs.h | cut -d: -f1) +$(grep -n 'oplus_is_dot_dotdot' f2fs.h | cut -d: -f1) @@
           -static inline bool oplus_is_dot_dotdot(const u8 *name, size_t len)
@@ -227,19 +234,19 @@ jobs:
           +#define SECTOR_FROM_BLOCK(sb, blk) ((blk) << ((sb)->s_blocksize_bits - 9))
           EOL
         
-          # 步骤3：应用动态补丁
+          echo "应用补丁..."
           if patch -p0 -N --dry-run < dynamic.patch; then
           patch -p0 < dynamic.patch
           else
-          echo "!! 动态补丁失败，启用最终手段 !!"
+          echo "!! 启用最终修改方案 !!"
           sed -i 's/u8 \*name/char *name/g' f2fs.h
           sed -i '1i #define SECTOR_FROM_BLOCK(sb, blk) ((blk) << ((sb)->s_blocksize_bits - 9))' f2fs.h
           fi
         
-          # 步骤4：验证结果
-          grep 'oplus_is_dot_dotdot' f2fs.h | grep 'char' || (echo "参数修改失败"; exit 1)
+          # 验证结果
+          echo "验证修改..."
+          grep 'char \*name' f2fs.h || (echo "参数类型修改失败"; exit 1)
           grep 'SECTOR_FROM_BLOCK' f2fs.h || (echo "宏添加失败"; exit 1)
-
 
       # ▼▼▼ 插入位置4：配置更新 ▼▼▼
       - name: Update Filesystem Configurations
