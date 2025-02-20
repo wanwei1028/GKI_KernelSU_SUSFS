@@ -212,29 +212,33 @@ jobs:
       - name: Apply Kernel Version Adaptation
         run: |
           set -ex
-          echo "应用内核版本适配补丁..."
           cd "$CONFIG/common/fs/f2fs"
-    
-          # 备份原始文件
-          cp f2fs.h f2fs.h.bak
-    
-          # 第一次修改尝试
-          if ! sed -E -i 's/(static inline bool oplus_is_dot_dotdot)\(const u8 \*name, size_t len\)/\1(const char *name, size_t len)/' f2fs.h; then
-          echo "⚠️ 第一次修改失败，尝试备用方案"
-          sed -i 's/const u8 \*name/const char *name/' f2fs.h
+        
+          # 步骤1：环境准备
+          cp f2fs.h f2fs.h.original
+          dos2unix f2fs.h  # 转换换行符
+        
+          # 步骤2：动态生成补丁
+          cat > dynamic.patch << 'EOL'
+          @@ -$(grep -n 'oplus_is_dot_dotdot' f2fs.h | cut -d: -f1) +$(grep -n 'oplus_is_dot_dotdot' f2fs.h | cut -d: -f1) @@
+          -static inline bool oplus_is_dot_dotdot(const u8 *name, size_t len)
+          +static inline bool oplus_is_dot_dotdot(const char *name, size_t len)
+          @@ -$(($(grep -n 'oplus_is_dot_dotdot' f2fs.h | cut -d: -f1)-1)) +$(($(grep -n 'oplus_is_dot_dotdot' f2fs.h | cut -d: -f1)-1)) @@
+          +#define SECTOR_FROM_BLOCK(sb, blk) ((blk) << ((sb)->s_blocksize_bits - 9))
+          EOL
+        
+          # 步骤3：应用动态补丁
+          if patch -p0 -N --dry-run < dynamic.patch; then
+          patch -p0 < dynamic.patch
+          else
+          echo "!! 动态补丁失败，启用最终手段 !!"
+          sed -i 's/u8 \*name/char *name/g' f2fs.h
+          sed -i '1i #define SECTOR_FROM_BLOCK(sb, blk) ((blk) << ((sb)->s_blocksize_bits - 9))' f2fs.h
           fi
-    
-          # 第二次修改尝试
-          if ! sed -i '/^[[:space:]]*static inline bool oplus_is_dot_dotdot/i #define SECTOR_FROM_BLOCK(sb, blk) ((blk) << ((sb)->s_blocksize_bits - 9))' f2fs.h; then
-          echo "⚠️ 宏插入失败，尝试追加到文件末尾"
-          echo "#define SECTOR_FROM_BLOCK(sb, blk) ((blk) << ((sb)->s_blocksize_bits - 9))" >> f2fs.h
-          fi
-    
-          # 对比修改
-          if diff f2fs.h.bak f2fs.h; then
-          echo "❌ 文件未发生任何修改"
-          exit 1
-          fi
+        
+          # 步骤4：验证结果
+          grep 'oplus_is_dot_dotdot' f2fs.h | grep 'char' || (echo "参数修改失败"; exit 1)
+          grep 'SECTOR_FROM_BLOCK' f2fs.h || (echo "宏添加失败"; exit 1)
 
 
       # ▼▼▼ 插入位置4：配置更新 ▼▼▼
