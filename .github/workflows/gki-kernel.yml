@@ -187,39 +187,28 @@ jobs:
 
       - name: Fix Symbol Conflicts
         run: |
-          echo "=== 深度符号冲突修复 ==="
+          set -ex
           cd "$CONFIG/common"
 
-          # 1. 完全重命名冲突函数
-          find fs/f2fs/ -type f -exec sed -i '
-            s/\bis_dot_dotdot\b/oplus_is_dot_dotdot/g;
-            s/\baddrs_per_page\b/oplus_addrs_per_page/g
-          ' {} +
+          # 1. 修复is_dot_dotdot冲突
+          sed -i 's/\bis_dot_dotdot\b/oplus_is_dot_dotdot/g' fs/f2fs/*.[ch]
+          echo "static inline bool oplus_is_dot_dotdot(const char *name, size_t len) { return is_dot_dotdot(name, len); }" >> fs/f2fs/f2fs.h
 
-          # 2. 修正宏定义参数
-          sed -i '
-            s/OPLUS_ADDRS_PER_PAGE(page, inode)/oplus_addrs_per_page(inode)/g;
-            s/IS_INODE(page)/true/g
-          ' include/linux/f2fs_fs.h
+          # 2. 修正ADDRS宏参数
+          sed -i 's/OPLUS_ADDRS_PER_PAGE(page, inode)/OPLUS_ADDRS_PER_PAGE(inode)/g' \
+            include/linux/f2fs_fs.h fs/f2fs/*.[ch]
 
-          # 3. 添加正确的函数实现
-          cat >> fs/f2fs/f2fs.h <<'EOL'
-          static inline unsigned int oplus_addrs_per_page(struct inode *inode)
-          {
-              return SECTOR_FROM_BLOCK(inode->i_sb, DEF_ADDRS_PER_INODE);
-          }
-          EOL
+          # 3. 修复函数声明
+          sed -i '/static inline unsigned int OPLUS_ADDRS_PER_PAGE/,/}/d' fs/f2fs/f2fs.h
+          echo "static inline unsigned int OPLUS_ADDRS_PER_PAGE(struct inode *inode) {" >> fs/f2fs/f2fs.h
+          echo "    return SECTOR_FROM_BLOCK(inode->i_sb, DEF_ADDRS_PER_INODE);" >> fs/f2fs/f2fs.h
+          echo "}" >> fs/f2fs/f2fs.h
 
-          # 4. 统一参数类型
-          find fs/f2fs/ -type f -exec sed -i '
-            s/const u8 \*name/const char \*name/g;
-            s/name\[i\]/(unsigned char)name\[i\]/g
-          ' {} +
+          # 4. 验证修复
+          grep -rn 'oplus_is_dot_dotdot' fs/f2fs/
+          grep -rn 'OPLUS_ADDRS_PER_PAGE' fs/f2fs/
 
-          # 5. 验证修改
-          echo "=== 验证修复结果 ==="
-          grep -A3 'oplus_is_dot_dotdot' fs/f2fs/f2fs.h
-          grep 'OPLUS_ADDRS_PER_PAGE' include/linux/f2fs_fs.h
+
 
 
       # ▼▼▼ 插入位置4：配置更新 ▼▼▼
