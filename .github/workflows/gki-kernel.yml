@@ -237,29 +237,81 @@ jobs:
 
           # 增强验证
           echo "=== 修复验证 ==="
-          find fs/f2fs/ -type f \( -name '*.c' -o -name '*.h' \) -exec \
-            grep -Hn 'oplus_is_dot_dotdot' {} +
+      - name: Clone Official Kernel Source
+        run: |
+          echo "克隆OnePlus官方内核源码..."
+          git clone https://github.com/OnePlusOSS/android_kernel_oneplus_sm8750.git \
+            -b sm8750_v_15.0.0_oneplus_13 \
+            oneplus_kernel
+          echo "验证文件系统结构..."
+          ls -la oneplus_kernel/fs/{ext4,f2fs,crypto}
 
+      - name: Transplant Filesystem Drivers
+        run: |
+          echo "=== 开始移植关键驱动 ==="
+          cd "$CONFIG/common"
 
+          # 删除GKI原有实现
+          rm -rf fs/{ext4,f2fs,crypto}
+          
+          # 完整移植驱动
+          cp -r ../../oneplus_kernel/fs/{ext4,f2fs,crypto} fs/
+          
+          # 移植头文件
+          mkdir -p include/linux/
+          cp ../../oneplus_kernel/include/linux/{fscrypt,fsverity}.h include/linux/
 
+          # 验证移植结果
+          echo "移植后文件结构："
+          tree -L 3 fs/{ext4,f2fs,crypto}
 
+      - name: Fix Symbol Conflicts
+        run: |
+          echo "=== 执行符号隔离 ==="
+          cd "$CONFIG/common"
+
+          # 重命名核心函数（示例）
+          declare -A SYMBOL_MAP=(
+            ["is_dot_dotdot"]="oplus_is_dot_dotdot"
+            ["addrs_per_page"]="oplus_addrs_per_page"
+            ["f2fs_special_file"]="oplus_f2fs_special_file"
+          )
+
+          # 批量替换符号
+          for orig in "${!SYMBOL_MAP[@]}"; do
+            new="${SYMBOL_MAP[$orig]}"
+            find fs/{ext4,f2fs} -type f -exec sed -i \
+              -e "s/\b${orig}\b/${new}/g" \
+              -e "s/\b${orig}\b/${new}/g" {} +
+          done
+
+          # 修复参数类型不匹配
+          echo "static inline bool oplus_is_dot_dotdot(const char *name, size_t len)" >> fs/f2fs/f2fs.h
+          
+          # 修正宏定义
+          sed -i '
+            s/ADDRS_PER_PAGE/OPLUS_ADDRS_PER_PAGE/g;
+            s/ADDRS_PER_BLOCK/OPLUS_ADDRS_PER_BLOCK/g
+          ' include/linux/f2fs_fs.h
+
+          # 验证修改
+          echo "=== 修改验证 ==="
+          grep -rn 'OPLUS_ADDRS_PER' fs/f2fs/
+
+      # ▼▼▼ 插入位置4：配置更新 ▼▼▼
       - name: Update Filesystem Configurations
         run: |
-          echo "Updating filesystem configurations..."
+          echo "更新文件系统配置..."
           cd "$CONFIG/common/arch/arm64/configs"
           
-          # 启用增强的文件系统特性
-          sed -i '/CONFIG_EXT4_FS=/d' gki_defconfig
-          sed -i '/CONFIG_F2FS_FS=/d' gki_defconfig
+          # 禁用GKI默认配置
+          sed -i '/CONFIG_EXT4_FS/d' gki_defconfig
+          sed -i '/CONFIG_F2FS_FS/d' gki_defconfig
           
+          # 启用移植驱动配置
           echo "CONFIG_EXT4_FS=y" >> gki_defconfig
-          echo "CONFIG_EXT4_USE_FORTIFY_STRING=y" >> gki_defconfig
-          echo "CONFIG_EXT4_ENCRYPTION=y" >> gki_defconfig
           echo "CONFIG_F2FS_FS=y" >> gki_defconfig
-          echo "CONFIG_F2FS_FS_ENCRYPTION=y" >> gki_defconfig
-          echo "CONFIG_F2FS_FS_XATTR=y" >> gki_defconfig
-          echo "CONFIG_FS_VERITY=y" >> gki_defconfig
-          echo "CONFIG_FS_ENCRYPTION=y" >> gki_defconfig
+          echo "CONFIG_OPLUS_FS=y" >> gki_defconfig
 
       - name: Determine the branch for KernelSU
         run: |
