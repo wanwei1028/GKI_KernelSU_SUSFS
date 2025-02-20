@@ -207,21 +207,57 @@ jobs:
 
           # 4. 修复ADDRS_PER_PAGE实现
           sed -i 's/return SECTOR_FROM_BLOCK(inode->i_sb, DEF_ADDRS_PER_INODE);/return DEF_ADDRS_PER_INODE << (inode->i_sb->s_blocksize_bits - 9);/' fs/f2fs/f2fs.h
-         
+               
+       # ▼▼▼ 在Fix Symbol Conflicts步骤后插入 ▼▼▼
+      - name: Fix Macro Conflicts
+        run: |
+          cd "$CONFIG/common"
+    
+          # 1. 清理旧宏定义
+          find fs/f2fs -name '*.h' -exec sed -i '/#define SECTOR_FROM_BLOCK/d' {} \;
+    
+          # 2. 统一宏定义
+          cat > include/linux/f2fs_macros.h << 'EOL'
+          #ifndef _LINUX_F2FS_MACROS_H
+          #define _LINUX_F2FS_MACROS_H
+    
+          #define SECTOR_FROM_BLOCK(sb, blk) ((blk) << ((sb)->s_blocksize_bits - 9))
+          #define ADDRS_PER_PAGE(inode, is_inode) addrs_per_page(inode, is_inode)
+    
+          #endif
+          EOL
+    
+          # 3. 添加头文件包含
+          find fs/f2fs -name '*.c' -o -name '*.h' | xargs sed -i '1i #include <linux/f2fs_macros.h>'
 
-      
-          
+      - name: Add Missing Functions
+        run: |
+          cd "$CONFIG/common/fs/f2fs"
+    
+          # 添加函数声明
+          sed -i '/struct inode;/a unsigned int addrs_per_page(struct inode *inode, bool is_inode);' f2fs.h
+    
+          # 添加函数实现
+          cat >> f2fs.h << 'EOL'
+          static inline unsigned int addrs_per_page(struct inode *inode, bool is_inode) {
+          return is_inode ? addrs_per_inode(inode) : ADDRS_PER_BLOCK(inode);
+          }
+          EOL
 
-      # ▼▼▼ 插入位置4：配置更新 ▼▼▼
+        # ▼▼▼ 更新配置步骤 ▼▼▼
       - name: Update Filesystem Configurations
         run: |
-          echo "更新文件系统配置..."
           cd "$CONFIG/common/arch/arm64/configs"
-          
-          # 添加加密相关配置
-          echo "CONFIG_FS_ENCRYPTION=y" >> gki_defconfig
-          echo "CONFIG_F2FS_FS_ENCRYPTION=y" >> gki_defconfig
-          echo "CONFIG_EXT4_ENCRYPTION=y" >> gki_defconfig
+    
+          # 禁用冲突配置
+          sed -i '/CONFIG_F2FS_FS_ENCRYPTION/d' gki_defconfig
+          sed -i '/CONFIG_EXT4_ENCRYPTION/d' gki_defconfig
+    
+          # 启用必要配置
+          echo "CONFIG_F2FS_FS=y" >> gki_defconfig
+          echo "CONFIG_F2FS_STAT_FS=y" >> gki_defconfig
+          echo "CONFIG_F2FS_FS_XATTR=y" >> gki_defconfig          
+
 
       - name: Determine the branch for KernelSU
         run: |
