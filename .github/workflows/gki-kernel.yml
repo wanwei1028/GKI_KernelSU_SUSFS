@@ -247,6 +247,40 @@ jobs:
           cd ../KernelSU
           patch -p1 < mksu_susfs_fix.patch || true
 
+      - name: Modify KernelSU Source Files
+        run: |
+          echo "Modifying KernelSU source files in $CONFIG directory..."
+
+          # 定义不同变体的源文件路径
+          if [ "${{ inputs.kernelsu_variant }}" == "Official" ]; then
+            KSU_C_PATH="$CONFIG/KernelSU/kernel/ksud.c"
+            KSU_H_PATH="$CONFIG/KernelSU/kernel/ksud.h"
+          elif [ "${{ inputs.kernelsu_variant }}" == "Next" ]; then
+            KSU_C_PATH="$CONFIG/KernelSU-Next/kernel/ksud.c"
+            KSU_H_PATH="$CONFIG/KernelSU-Next/kernel/ksud.h"
+          elif [ "${{ inputs.kernelsu_variant }}" == "MKSU" ]; then
+            KSU_C_PATH="$CONFIG/KernelSU/kernel/ksud.c"
+            KSU_H_PATH="$CONFIG/KernelSU/kernel/ksud.h"
+          fi
+
+          # 修改 ksud.c
+          sed -i '/#include "selinux\/selinux.h"/a \
+          bool ksu_vfs_read_hook = true;\n\
+          bool ksu_execveat_hook = true;\n\
+          bool ksu_input_hook = true;\n\
+          EXPORT_SYMBOL(ksu_vfs_read_hook);\n\
+          EXPORT_SYMBOL(ksu_execveat_hook);\n\
+          EXPORT_SYMBOL(ksu_input_hook);' "$KSU_C_PATH" || true
+
+          # 修改 ksud.h 
+          sed -i '/#include <linux\/types.h>/a \
+          extern bool ksu_vfs_read_hook;\n\
+          extern bool ksu_execveat_hook;\n\
+          extern bool ksu_input_hook;' "$KSU_H_PATH" || true
+
+          echo "Applied modifications to $KSU_C_PATH and $KSU_H_PATH"
+
+
       - name: Apply New Hooks Patches
         run: |
           echo "Changing to configuration directory: $CONFIG..."
