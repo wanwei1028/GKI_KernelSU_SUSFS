@@ -30,6 +30,11 @@ on:
       revision:
         required: false
         type: string
+      since_date:  # 新增时间参数
+        required: false
+        type: string
+        default: "2024-08-22"
+        description: 'ISO格式日期 (YYYY-MM-DD)'
 
 jobs:
   build-kernel-kernelsu-susfs:
