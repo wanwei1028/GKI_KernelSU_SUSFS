@@ -208,32 +208,87 @@ jobs:
 
       - name: Apply OnePlus Patches
         run: |
-          echo "进入内核源码目录: $CONFIG/common"
           cd "$CONFIG/common"
           
-          echo "当前目录: $(pwd)"
-          echo "补丁路径: $GITHUB_WORKSPACE/kernel_patches/oneplus"
-          
-          # 应用补丁前检查
-          if [ ! -d "$GITHUB_WORKSPACE/kernel_patches/oneplus" ]; then
-            echo "::error::补丁目录不存在：$GITHUB_WORKSPACE/kernel_patches/oneplus"
-            exit 1
-          fi
-          
-          # 应用补丁时使用-p1参数处理路径
-          for patch in "$GITHUB_WORKSPACE/kernel_patches/oneplus"/*.patch; do
-            echo "正在应用补丁: $(basename $patch)"
+          # 定义冲突处理函数
+          replace_entire_file() {
+            local file_path=$1
+            local remote_repo=$2
+            local remote_branch=$3
             
-            # 使用git apply进行更安全的补丁应用，并剥离路径前缀
+            echo "::group::强制替换文件 $file_path"
+            mkdir -p temp_replace
+            
+            # 从OnePlus仓库下载原始文件
+            curl -sLo "temp_replace/$(basename $file_path)" \
+                    "https://raw.githubusercontent.com/OnePlusOSS/android_kernel_common_oneplus_sm8750/$remote_branch/$file_path"
+            
+            # 备份原文件
+            cp "$file_path" "$file_path.bak"
+            
+            # 替换文件
+            mv "temp_replace/$(basename $file_path)" "$file_path"
+            
+            echo "::notice::已替换 $file_path 来自分支 $remote_branch"
+            echo "::endgroup::"
+          }
+
+          # 应用补丁并处理失败文件
+          for patch in "$GITHUB_WORKSPACE/kernel_patches/oneplus"/*.patch; do
+            echo "::group::处理补丁 $(basename $patch)"
+            
             if ! git apply --check -p1 "$patch"; then
-                    echo "::warning::补丁检查失败: $patch，尝试跳过..."
-                    continue
+                    echo "::warning::补丁检查失败，尝试强制应用..."
+                    
+                    # 尝试三方合并
+                    git apply -p1 --3way --reject "$patch" || true
+                    
+                    # 识别冲突文件
+                    conflict_files=$(find . -name "*.rej" | sed 's/.rej$//')
+                    
+                    # 特殊文件处理
+                    for file in $conflict_files; do
+                      case $file in
+                              android/abi_gki_aarch64_qcom|fs/erofs/decompressor.c)
+                                replace_entire_file "$file" \
+                                        "OnePlusOSS/android_kernel_common_oneplus_sm8750" \
+                                        "oneplus/sm8750_v_15.0.0_oneplus_13"
+                                ;;
+                              drivers/android/binder.c)
+                                replace_entire_file "$file" \
+                                        "OnePlusOSS/android_kernel_common_oneplus_sm8750" \
+                                        "oneplus/sm8750_v_15.0.0_oneplus_13"
+                                
+                                # 特殊适配处理
+                                sed -i '/#include <linux\/fs.h>/a #include <linux/sched.h>' "$file"
+                                ;;
+                              *)
+                                echo "::error::未处理的冲突文件: $file"
+                                ;;
+                      esac
+                      rm -f "$file.rej"
+                    done
+            else
+                    git am -p1 --ignore-whitespace "$patch"
             fi
             
-            # 应用补丁时剥离路径前缀
-            git am --ignore-whitespace -p1 "$patch" || \
-                    echo "::warning::补丁应用失败: $patch (可能已应用)"
+            echo "::endgroup::"
           done
+
+          # 验证关键文件替换结果
+          verify_files=(
+            "android/abi_gki_aarch64_qcom"
+            "fs/erofs/decompressor.c" 
+            "drivers/android/binder.c"
+          )
+          
+          for file in "${verify_files[@]}"; do
+            if ! grep -q "OnePlus" "$file"; then
+                    echo "::error::文件替换失败: $file"
+                    exit 1
+            fi
+          done
+
           
       - name: Determine the branch for KernelSU
         run: |
