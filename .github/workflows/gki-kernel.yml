@@ -176,71 +176,63 @@ jobs:
 
       - name: Setup OPLUS Patch Environment
         run: |
-          # 安装必要工具
-          sudo apt-get install -y python3 python3-pip abigail-tools
-          pip3 install configparser
-
-          # 创建配置文件和转换脚本
-          mkdir -p .scripts
-          cat > .scripts/oplus_patch_convert.py <<'EOF'
-          # 这里粘贴你之前提供的完整Python转换脚本代码
+          mkdir -p "${GITHUB_WORKSPACE}/.scripts"
+          
+          cat > "${GITHUB_WORKSPACE}/.scripts/oplus_patch_convert.py" <<'EOF'
+          # Python脚本内容（需完整粘贴）
           EOF
-
-          cat > .oplus_patch_config <<'EOF'
+          
+          cat > "${GITHUB_WORKSPACE}/.oplus_patch_config" <<'EOF'
           [path_mapping]
           drivers/android/ = drivers/staging/android/
           fs/erofs_oplus/ = fs/erofs/
           include/trace/hooks/oplus/ = include/trace/hooks/
-
+          
           [symbol_mapping]
           oplus_binder_ = binder_
           op_charger_ = charger_
           f2fs_oplus_ = f2fs_
           EOF
+          
+          echo "验证目录结构:"
+          ls -al "${GITHUB_WORKSPACE}/.scripts"
 
       - name: Fetch and Convert OPLUS Patches
         run: |
-          echo "正在获取OnePlus补丁..."
+          cd "${GITHUB_WORKSPACE}"
+          
           git clone https://github.com/OnePlusOSS/android_kernel_common_oneplus_sm8750 \
-          -b oneplus/sm8750_v_15.0.0_oneplus_13 \
-          --shallow-since="2024-08-22" \
-          oneplus-source
-
-          # 生成原始补丁
-          cd oneplus-source
-          git format-patch -o ../raw-oplus-patches $(git log -1 --before="2024-08-22" --format=%H)
-
-          # 转换补丁
-          mkdir -p ../converted-oplus-patches
-          for patch in ../raw-oplus-patches/*.patch; do
-          python3 .scripts/oplus_patch_convert.py "$patch" .oplus_patch_config
-          mv converted_*.patch ../converted-oplus-patches/
+            -b oneplus/sm8750_v_15.0.0_oneplus_13 \
+            --shallow-since="2024-08-22" \
+            oneplus-source
+          
+          cd "${GITHUB_WORKSPACE}/oneplus-source"
+          git format-patch -o "${GITHUB_WORKSPACE}/raw-oplus-patches" $(git log -1 --before="2024-08-22" --format=%H)
+          
+          mkdir -p "${GITHUB_WORKSPACE}/converted-oplus-patches"
+          for patch in "${GITHUB_WORKSPACE}/raw-oplus-patches"/*.patch; do
+            python3 "${GITHUB_WORKSPACE}/.scripts/oplus_patch_convert.py" \
+              "$patch" \
+              "${GITHUB_WORKSPACE}/.oplus_patch_config"
+            mv converted_*.patch "${GITHUB_WORKSPACE}/converted-oplus-patches/"
           done
+          
+          echo "生成补丁列表:"
+          ls -l "${GITHUB_WORKSPACE}/converted-oplus-patches"
 
       - name: Apply OPLUS Patches
         run: |
-          echo "应用转换后的补丁..."
-          cd "$CONFIG/common"
-
-          # 创建自动解决路径的补丁应用器
-          cat > apply_patches.sh <<'EOF'
-          #!/bin/bash
-          set -eo pipefail
-        
-          for patch in "$@"; do
-          echo "正在应用: $patch"
-          filterdiff -p1 -x 'android/*' "$patch" | \
-          sed -e 's|fs/erofs_oplus/|fs/erofs/|g' \
-          -e 's|drivers/android/|drivers/staging/android/|g' | \
-          patch -p1 --no-backup-if-mismatch -l -F 10 || \
-          { echo "::warning::补丁应用失败: $patch"; continue; }
+          KERNEL_SRC="${GITHUB_WORKSPACE}/${CONFIG}/common"
+          
+          cd "${KERNEL_SRC}"
+          for patch in "${GITHUB_WORKSPACE}/converted-oplus-patches"/*.patch; do
+            echo "应用补丁: ${patch##*/}"
+            head -n 5 "$patch"
+            patch -p1 --verbose < "$patch" || echo "跳过失败的补丁: ${patch##*/}"
           done
-          EOF
-
-          chmod +x apply_patches.sh
-          find "$GITHUB_WORKSPACE/converted-oplus-patches" -name "*.patch" -print0 | \
-          xargs -0 ./apply_patches.sh
-
+          
+          echo "验证关键文件:"
+          [ -f drivers/staging/android/binder.c ] && ls -l drivers/staging/android/binder.c
 
       - name: Determine the branch for KernelSU
         run: |
