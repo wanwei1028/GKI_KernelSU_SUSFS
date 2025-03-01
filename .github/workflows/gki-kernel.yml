@@ -179,53 +179,44 @@ jobs:
           $REPO --version
           $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
 
-      - name: Apply upstream commits since ${{ inputs.since_date }}
-        timeout-minutes: 15
-        env:
-          TARGET_REPO: https://github.com/OnePlusOSS/android_kernel_common_oneplus_sm8750
-          TARGET_BRANCH: oneplus/sm8750_v_15.0.0_oneplus_13
+      - name: Apply OnePlus Upstream Commits
         run: |
-          echo "正在处理上游提交..."
-          cd "$CONFIG"
+         echo "##[group] 同步上游提交..."
+         # 确认工作目录结构
+         echo "当前工作目录: $(pwd)"
+         echo "CONFIG 目录: $CONFIG"
 
-          # Step 1: 克隆目标仓库 (浅克隆优化)
-          git clone --depth=100 --branch=$TARGET_BRANCH --single-branch \
-            --no-tags $TARGET_REPO upstream-repo
+         # 克隆目标仓库到临时目录
+         git clone --depth=50 --branch=oneplus/sm8750_v_15.0.0_oneplus_13 \
+         https://github.com/OnePlusOSS/android_kernel_common_oneplus_sm8750 \
+         "$CONFIG/upstream-tmp"
 
-          # Step 2: 生成提交列表
-          cd upstream-repo
-          git log --reverse --since="${{ inputs.since_date }}" \
-            --pretty=format:"%H %cd %s" --date=iso > ../commit-list.log
+         # 生成补丁文件（相对路径调整）
+         cd "$CONFIG/upstream-tmp"
+         git log --since="2024-08-22" --reverse --pretty=format:"%H" > "$CONFIG/commit-list.txt"
+    
+         # 生成补丁到专用目录
+         mkdir -p "$CONFIG/patches"
+         while read commit; do
+         git format-patch -1 "$commit" -o "$CONFIG/patches" 
+         done < "$CONFIG/commit-list.txt"
 
-          # 检查是否有符合条件的提交
-          if [ ! -s ../commit-list.log ]; then
-            echo "::warning::未找到 ${{ inputs.since_date }} 之后的提交"
-            exit 0
-          fi
+         # 应用补丁到内核源码目录
+         cd "$CONFIG/common"  # 进入您的内核源码目录
+         find "$CONFIG/patches" -name "*.patch" | sort | while read patch; do
+         echo "应用补丁: $(basename "$patch")"
+         if ! git am --whitespace=nowarn "$patch"; then
+         echo "::warning::Git应用失败，尝试手动应用..."
+         patch -p1 --forward < "$patch" || :
+         git add -A
+         git am --continue || true
+         fi
+         done
 
-          # Step 3: 生成补丁文件
-          mkdir -p ../patches
-          tac ../commit-list.log | while read -r commit _; do
-            git format-patch -1 "$commit" -o ../patches --no-stat --no-numbered
-          done
+         # 清理临时文件
+         rm -rf "$CONFIG/upstream-tmp" "$CONFIG/patches" "$CONFIG/commit-list.txt"
+         echo "##[endgroup]"
 
-          # Step 4: 应用补丁到内核源码
-          cd ../common
-          find ../../patches -name "*.patch" | sort | while read patch; do
-            echo "应用补丁: $(basename "$patch")"
-            if ! git am --whitespace=nowarn "$patch"; then
-              echo "::warning::Git应用失败，尝试手动打补丁..."
-              patch -p1 --forward < "$patch" || :
-              git add -A
-              git am --continue || true
-            fi
-          done
-
-          # Step 5: 清理和调试
-          cd ../..
-          echo "已应用提交列表:"
-          cat commit-list.log
-          rm -rf upstream-repo patches
 
       - name: Determine the branch for KernelSU
         run: |
