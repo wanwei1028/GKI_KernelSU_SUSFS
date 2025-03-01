@@ -181,41 +181,72 @@ jobs:
 
       - name: Apply OnePlus Upstream Commits
         run: |
-         echo "##[group] 同步上游提交..."
-         # 确认工作目录结构
-         echo "当前工作目录: $(pwd)"
-         echo "CONFIG 目录: $CONFIG"
-
-         # 克隆目标仓库到临时目录
-         git clone --depth=50 --branch=oneplus/sm8750_v_15.0.0_oneplus_13 \
-         https://github.com/OnePlusOSS/android_kernel_common_oneplus_sm8750 \
-         "$CONFIG/upstream-tmp"
-
-         # 生成补丁文件（相对路径调整）
-         cd "$CONFIG/upstream-tmp"
-         git log --since="2024-08-22" --reverse --pretty=format:"%H" > "$CONFIG/commit-list.txt"
+          echo "##[group]🔄 同步上游提交（适配您的目录结构）"
     
-         # 生成补丁到专用目录
-         mkdir -p "$CONFIG/patches"
-         while read commit; do
-         git format-patch -1 "$commit" -o "$CONFIG/patches" 
-         done < "$CONFIG/commit-list.txt"
+          # 基础路径设置
+          CONFIG_DIR="${{ env.CONFIG }}"
+          KERNEL_SRC="${CONFIG_DIR}/common"  # 您的内核源码目录
+          echo "CONFIG目录: ${CONFIG_DIR}"
+          echo "内核源码路径: ${KERNEL_SRC}"
 
-         # 应用补丁到内核源码目录
-         cd "$CONFIG/common"  # 进入您的内核源码目录
-         find "$CONFIG/patches" -name "*.patch" | sort | while read patch; do
-         echo "应用补丁: $(basename "$patch")"
-         if ! git am --whitespace=nowarn "$patch"; then
-         echo "::warning::Git应用失败，尝试手动应用..."
-         patch -p1 --forward < "$patch" || :
-         git add -A
-         git am --continue || true
-         fi
-         done
+          # 步骤1: 克隆目标仓库到临时目录
+          UPSTREAM_TMP="${CONFIG_DIR}/upstream-tmp"
+          git clone --depth=50 --branch=oneplus/sm8750_v_15.0.0_oneplus_13 \
+          https://github.com/OnePlusOSS/android_kernel_common_oneplus_sm8750 \
+          "${UPSTREAM_TMP}"
+    
+          # 步骤2: 生成提交列表（带时区）
+          cd "${UPSTREAM_TMP}"
+          COMMIT_LIST="${CONFIG_DIR}/commit-list-$(date +%s).txt"
+          git log --since="2024-08-22T00:00:00+08:00" --reverse \
+          --pretty=format:"%H" > "${COMMIT_LIST}"
+    
+          # 无提交时提前退出
+          if [ ! -s "${COMMIT_LIST}" ]; then
+          echo "::notice::未找到新提交，跳过补丁应用"
+          exit 0
+          fi
 
-         # 清理临时文件
-         rm -rf "$CONFIG/upstream-tmp" "$CONFIG/patches" "$CONFIG/commit-list.txt"
-         echo "##[endgroup]"
+          # 步骤3: 生成补丁到专用目录
+          PATCH_DIR="${CONFIG_DIR}/patches-$(date +%s)"
+          mkdir -p "${PATCH_DIR}"
+          while read commit; do
+          git format-patch -1 "${commit}" -o "${PATCH_DIR}" \
+          --no-stat --no-numbered --zero-commit
+          done < "${COMMIT_LIST}"
+
+          # 步骤4: 应用补丁到内核源码
+          cd "${KERNEL_SRC}"
+          find "${PATCH_DIR}" -name "*.patch" | sort | while read patch; do
+          echo "##[group]🔧 应用补丁: $(basename "${patch}")"
+      
+          # 使用git am尝试应用
+          if ! git am --whitespace=nowarn "${patch}"; then
+          echo "::warning::Git应用失败，尝试降级处理..."
+        
+          # 使用patch命令应用
+          if patch -p1 --forward < "${patch}"; then
+          echo "✅ 手动补丁应用成功"
+          git add -A
+          git am --continue || true
+          else
+          echo "❌ 严重错误：无法应用补丁，保留冲突文件"
+          find . -name "*.rej" -exec mv {} "${CONFIG_DIR}/conflicts/" \;
+          fi
+          fi
+          echo "##[endgroup]"
+          done
+
+          # 步骤5: 清理和报告
+          echo "##[group]🧹 清理临时文件..."
+          rm -rf "${UPSTREAM_TMP}" "${PATCH_DIR}" "${COMMIT_LIST}"
+          echo "已清理的目录："
+          echo "- ${UPSTREAM_TMP}"
+          echo "- ${PATCH_DIR}"
+          echo "##[endgroup]"
+    
+          echo "✅ 上游提交应用完成"
+          echo "##[endgroup]"
 
 
       - name: Determine the branch for KernelSU
