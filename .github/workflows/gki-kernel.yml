@@ -174,65 +174,73 @@ jobs:
           $REPO --version
           $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
 
-      - name: Fetch and Generate OnePlus Patches
+      - name: Setup OPLUS Patch Environment
         run: |
-          echo "工作目录: $(pwd)" # 调试输出
+          # 安装必要工具
+          sudo apt-get install -y python3 python3-pip abigail-tools
+          pip3 install configparser
 
-          # 创建补丁存储目录
-          mkdir -p "$GITHUB_WORKSPACE/kernel_patches/oneplus"
+          # 创建配置文件和转换脚本
+          mkdir -p .scripts
+          cat > .scripts/oplus_patch_convert.py <<'EOF'
+          # 这里粘贴你之前提供的完整Python转换脚本代码
+          EOF
 
-          echo "克隆OnePlus内核仓库..."
+          cat > .oplus_patch_config <<'EOF'
+          [path_mapping]
+          drivers/android/ = drivers/staging/android/
+          fs/erofs_oplus/ = fs/erofs/
+          include/trace/hooks/oplus/ = include/trace/hooks/
+
+          [symbol_mapping]
+          oplus_binder_ = binder_
+          op_charger_ = charger_
+          f2fs_oplus_ = f2fs_
+          EOF
+
+      - name: Fetch and Convert OPLUS Patches
+        run: |
+          echo "正在获取OnePlus补丁..."
           git clone https://github.com/OnePlusOSS/android_kernel_common_oneplus_sm8750 \
-          --branch oneplus/sm8750_v_15.0.0_oneplus_13 \
-          --depth 1000 \
-          "$GITHUB_WORKSPACE/oneplus-source"
-    
-          cd "$GITHUB_WORKSPACE/oneplus-source"
-    
-          # 查找截止日期前的最后一个提交
-          echo "查找2024-08-22前的最后提交..."
-          LAST_COMMIT=$(git log -1 --before="2024-08-22" --format=%H)
-    
-          if [ -z "$LAST_COMMIT" ]; then
-          echo "::warning::在2024-08-22前未找到提交，跳过补丁生成"
-          exit 0
-          fi
-    
-          # 生成补丁文件
-          echo "生成从 $LAST_COMMIT 到 HEAD 的补丁..."
-          git format-patch -o "$GITHUB_WORKSPACE/kernel_patches/oneplus" $LAST_COMMIT..HEAD
-    
-          # 验证补丁生成
-          echo "生成的补丁列表:"
-          ls -l "$GITHUB_WORKSPACE/kernel_patches/oneplus"
+          -b oneplus/sm8750_v_15.0.0_oneplus_13 \
+          --shallow-since="2024-08-22" \
+          oneplus-source
 
-      - name: Apply OnePlus Patches
-        run: |
-          echo "进入内核源码目录: $CONFIG/common"
-          cd "$CONFIG/common"
-    
-          echo "当前目录: $(pwd)"
-          echo "补丁路径: $GITHUB_WORKSPACE/kernel_patches/oneplus"
-    
-          # 应用补丁前检查
-          if [ ! -d "$GITHUB_WORKSPACE/kernel_patches/oneplus" ]; then
-          echo "::error::补丁目录不存在：$GITHUB_WORKSPACE/kernel_patches/oneplus"
-          exit 1
-          fi
-    
-          # 应用补丁
-          for patch in "$GITHUB_WORKSPACE/kernel_patches/oneplus"/*.patch; do
-          echo "正在应用补丁: $(basename $patch)"
-      
-          # 使用git apply进行更安全的补丁应用
-          if ! git apply --check "$patch"; then
-          echo "::warning::补丁检查失败: $patch，尝试跳过..."
-          continue
-          fi
-      
-          git am --ignore-whitespace "$patch" || \
-          echo "::warning::补丁应用失败: $patch (可能已应用)"
+          # 生成原始补丁
+          cd oneplus-source
+          git format-patch -o ../raw-oplus-patches $(git log -1 --before="2024-08-22" --format=%H)
+
+          # 转换补丁
+          mkdir -p ../converted-oplus-patches
+          for patch in ../raw-oplus-patches/*.patch; do
+          python3 .scripts/oplus_patch_convert.py "$patch" .oplus_patch_config
+          mv converted_*.patch ../converted-oplus-patches/
           done
+
+      - name: Apply OPLUS Patches
+        run: |
+          echo "应用转换后的补丁..."
+          cd "$CONFIG/common"
+
+          # 创建自动解决路径的补丁应用器
+          cat > apply_patches.sh <<'EOF'
+          #!/bin/bash
+          set -eo pipefail
+        
+          for patch in "$@"; do
+          echo "正在应用: $patch"
+          filterdiff -p1 -x 'android/*' "$patch" | \
+          sed -e 's|fs/erofs_oplus/|fs/erofs/|g' \
+          -e 's|drivers/android/|drivers/staging/android/|g' | \
+          patch -p1 --no-backup-if-mismatch -l -F 10 || \
+          { echo "::warning::补丁应用失败: $patch"; continue; }
+          done
+          EOF
+
+          chmod +x apply_patches.sh
+          find "$GITHUB_WORKSPACE/converted-oplus-patches" -name "*.patch" -print0 | \
+          xargs -0 ./apply_patches.sh
+
 
       - name: Determine the branch for KernelSU
         run: |
