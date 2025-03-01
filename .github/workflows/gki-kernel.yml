@@ -30,12 +30,7 @@ on:
       revision:
         required: false
         type: string
-      since_date:  # 新增时间参数
-        required: false
-        type: string
-        default: "2024-08-22"
-        description: 'ISO格式日期 (YYYY-MM-DD)'
-
+        
 jobs:
   build-kernel-kernelsu-susfs:
     runs-on: ubuntu-22.04
@@ -179,58 +174,6 @@ jobs:
           $REPO --version
           $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
 
-      - name: Apply OnePlus Upstream Commits
-  run: |
-    echo "##[group]🔄 同步上游提交（使用默认工作区）"
-    
-    # 使用GitHub Actions标准工作区路径
-    echo "默认工作区: ${GITHUB_WORKSPACE}"
-    CONFIG_DIR="${GITHUB_WORKSPACE}/${{ env.CONFIG }}"
-    KERNEL_SRC="${CONFIG_DIR}/common"
-    
-    # 预先创建必要目录
-    echo "创建目录结构..."
-    mkdir -p "${CONFIG_DIR}/upstream-tmp"
-    mkdir -p "${KERNEL_SRC}"
-    mkdir -p "${CONFIG_DIR}/patches"
-
-    # 步骤1: 克隆目标仓库
-    echo "克隆仓库到: ${CONFIG_DIR}/upstream-tmp"
-    git clone --depth=50 --branch=oneplus/sm8750_v_15.0.0_oneplus_13 \
-      https://github.com/OnePlusOSS/android_kernel_common_oneplus_sm8750 \
-      "${CONFIG_DIR}/upstream-tmp"
-    
-    # 步骤2: 生成提交列表
-    cd "${CONFIG_DIR}/upstream-tmp"
-    COMMIT_LIST="${CONFIG_DIR}/commit-list.txt"
-    echo "生成提交列表到: ${COMMIT_LIST}"
-    git log --since="2024-08-22" --reverse --pretty=format:"%H" > "${COMMIT_LIST}"
-    
-    # 无提交处理
-    if [ ! -s "${COMMIT_LIST}" ]; then
-      echo "::notice::未找到新提交，跳过补丁应用"
-      exit 0
-    fi
-
-    # 步骤3: 生成补丁文件
-    echo "生成补丁到: ${CONFIG_DIR}/patches"
-    while read commit; do
-      git format-patch -1 "${commit}" -o "${CONFIG_DIR}/patches"
-    done < "${COMMIT_LIST}"
-
-    # 步骤4: 应用补丁
-    cd "${KERNEL_SRC}"
-    find "${CONFIG_DIR}/patches" -name "*.patch" | sort | while read patch; do
-      echo "应用补丁: $(basename "${patch}")"
-      git am --whitespace=nowarn "${patch}" || patch -p1 --forward < "${patch}"
-    done
-
-    # 清理
-    echo "清理临时文件..."
-    rm -rf "${CONFIG_DIR}/upstream-tmp" "${CONFIG_DIR}/patches" "${COMMIT_LIST}"
-    
-    echo "✅ 上游提交应用完成"
-    echo "##[endgroup]"
 
 
       - name: Determine the branch for KernelSU
