@@ -210,30 +210,31 @@ jobs:
         run: |
           echo "进入内核源码目录: $CONFIG/common"
           cd "$CONFIG/common"
-    
+          
           echo "当前目录: $(pwd)"
           echo "补丁路径: $GITHUB_WORKSPACE/kernel_patches/oneplus"
-    
+          
           # 应用补丁前检查
           if [ ! -d "$GITHUB_WORKSPACE/kernel_patches/oneplus" ]; then
-          echo "::error::补丁目录不存在：$GITHUB_WORKSPACE/kernel_patches/oneplus"
-          exit 1
+            echo "::error::补丁目录不存在：$GITHUB_WORKSPACE/kernel_patches/oneplus"
+            exit 1
           fi
-    
-          # 应用补丁
+          
+          # 应用补丁时使用-p1参数处理路径
           for patch in "$GITHUB_WORKSPACE/kernel_patches/oneplus"/*.patch; do
-          echo "正在应用补丁: $(basename $patch)"
-      
-          # 使用git apply进行更安全的补丁应用
-          if ! git apply --check "$patch"; then
-          echo "::warning::补丁检查失败: $patch，尝试跳过..."
-          continue
-          fi
-      
-          git am --ignore-whitespace "$patch" || \
-          echo "::warning::补丁应用失败: $patch (可能已应用)"
+            echo "正在应用补丁: $(basename $patch)"
+            
+            # 使用git apply进行更安全的补丁应用，并剥离路径前缀
+            if ! git apply --check -p1 "$patch"; then
+                    echo "::warning::补丁检查失败: $patch，尝试跳过..."
+                    continue
+            fi
+            
+            # 应用补丁时剥离路径前缀
+            git am --ignore-whitespace -p1 "$patch" || \
+                    echo "::warning::补丁应用失败: $patch (可能已应用)"
           done
-
+          
       - name: Determine the branch for KernelSU
         run: |
           if [[ "${{ inputs.kernelsu_branch }}" == "Stable" ]]; then
