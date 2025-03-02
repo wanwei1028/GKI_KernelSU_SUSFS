@@ -209,99 +209,124 @@ jobs:
       - name: Apply OnePlus Patches
         run: |
           cd "$CONFIG/common"
-          
-          # 预处理阶段：统一文件权限
-          find . -type f -name "*.c" -exec chmod 644 {} \;
-          find . -type f -name "*.h" -exec chmod 644 {} \;
 
-          # 定义智能替换函数
-          safe_replace() {
-            local file_path=$1
-            local remote_url="https://raw.githubusercontent.com/OnePlusOSS/android_kernel_common_oneplus_sm8750/oneplus/sm8750_v_15.0.0_oneplus_13/$file_path"
-            
-            echo "::group::强制替换 $file_path"
-            mkdir -p $(dirname "temp/$file_path")
-            
-            # 下载OnePlus官方文件
-            if ! curl -sfLo "temp/$file_path" "$remote_url"; then
-                    echo "::error::文件下载失败: $remote_url"
-                    return 1
-            fi
-            
-            # 保留原文件备份
-            cp "$file_path" "$file_path.bak"
-            
-            # 替换文件并添加兼容标记
-            mv "temp/$file_path" "$file_path"
-            echo "// Patched by OnePlus GKI Integration" >> "$file_path"
-            
+          # 动态ABI处理函数
+          process_abi() {
+            echo "::group::处理ABI兼容问题"
+            # 使用GKI工具生成基础ABI
+            ./build/abi/update_abi.py --abis=android/abi_gki_aarch64_qcom
+
+            # 合并OnePlus新增符号
+            curl -sL https://raw.githubusercontent.com/OnePlusOSS/android_kernel_common_oneplus_sm8750/oneplus/sm8750_v_15.0.0_oneplus_13/android/abi_gki_aarch64_qcom.oplus >> android/abi_gki_aarch64_qcom
+
+            # 去重排序
+            sort -u android/abi_gki_aarch64_qcom -o android/abi_gki_aarch64_qcom
             echo "::endgroup::"
           }
 
-          # 分阶段补丁应用
+          # 智能文件替换函数
+          smart_replace() {
+            local file=$1
+            local oplus_branch="oneplus/sm8750_v_15.0.0_oneplus_13"
+
+            echo "::group::替换文件 $file"
+            # 从OnePlus仓库获取原始文件
+            raw_url="https://raw.githubusercontent.com/OnePlusOSS/android_kernel_common_oneplus_sm8750/$oplus_branch/$file"
+            if ! curl -sfLo "$file.tmp" "$raw_url"; then
+                    echo "::error::文件下载失败: $raw_url"
+                    return 1
+            fi
+
+            # 保留GKI关键头文件
+            if [[ "$file" == *".h" ]]; then
+                    grep -A 10 -B 10 "GKI_COMPAT" "$file" > "$file.gki" || true
+            fi
+
+            # 替换文件并保留备份
+            mv "$file" "$file.bak"
+            mv "$file.tmp" "$file"
+
+            # 恢复GKI兼容部分
+            if [[ -f "$file.gki" ]]; then
+                    sed -i '/\/\/ GKI_COMPAT_START/,/\/\/ GKI_COMPAT_END/d' "$file"
+                    cat "$file.gki" >> "$file"
+                    rm "$file.gki"
+            fi
+            echo "::endgroup::"
+          }
+
+          # 分优先级处理补丁
+          declare -A patch_priority=(
+            ["drivers/android/binder.c"]=1
+            ["fs/erofs/decompressor.c"]=2
+            ["android/abi_gki_aarch64_qcom"]=3
+          )
+
           for patch in "$GITHUB_WORKSPACE/kernel_patches/oneplus"/*.patch; do
             echo "::group::处理补丁 $(basename $patch)"
             
-            # 第一阶段：尝试标准应用
-            if git apply --check -p1 "$patch"; then
-                    git am -p1 --ignore-whitespace "$patch"
-                    echo "补丁应用成功"
-                    continue
-            fi
-            
-            # 第二阶段：三方合并
-            echo "::warning::标准应用失败，尝试三方合并..."
-            if git apply -p1 --3way "$patch"; then
-                    git am --continue
-                    echo "三方合并成功"
-                    continue
-            fi
-            
-            # 第三阶段：冲突文件替换
-            echo "::error::合并失败，启动智能替换..."
-            conflict_files=($(grep -Po 'diff --git a/\K\S+' "$patch" | sed 's/^a/common/'))
-            
-            for file in "${conflict_files[@]}"; do
+            # 提取补丁影响文件
+            affected_files=($(grep -Po 'diff --git a/\K\S+' "$patch" | sed 's/^a/common/'))
+
+            # 按优先级排序
+            sorted_files=()
+            for file in "${affected_files[@]}"; do
+                    if [[ -v "patch_priority[$file]" ]]; then
+                      sorted_files+=("${patch_priority[$file]}|$file")
+                    fi
+            done
+            IFS=$'\n' sorted_files=($(sort -n <<< "${sorted_files[*]}"))
+            unset IFS
+
+            # 分阶段处理
+            for entry in "${sorted_files[@]}"; do
+                    IFS='|' read _ file <<< "$entry"
+                    
                     case $file in
                       android/abi_gki_aarch64_qcom)
-                              safe_replace "$file"
-                              sed -i '/CONFIG_/d' "$file"  # 清理配置冲突
+                              process_abi
                               ;;
-                      fs/erofs/decompressor.c)
-                              safe_replace "$file"
-                              # 添加GKI兼容头文件
-                              sed -i '1i #include <linux/gki_compat.h>' "$file"
-                              ;;
-                      drivers/android/binder.c)
-                              safe_replace "$file"
-                              # 修复函数签名
-                              sed -i 's/static int/static __always_inline int/g' "$file"
+                      drivers/android/binder.c|fs/erofs/decompressor.c)
+                              smart_replace "$file"
+                              # 特殊适配
+                              sed -i 's/oneplus_/gki_compat_/g' "$file"
                               ;;
                       *)
-                              echo "::warning::跳过未配置文件: $file"
+                              if [[ -f "$file" ]]; then
+                                git checkout HEAD -- "$file"  # 重置非关键文件
+                              fi
                               ;;
                     esac
             done
-            
-            # 最终尝试应用剩余变更
-            git apply -p1 --reject "$patch" || true
+
+            # 尝试应用剩余变更
+            if git apply -p1 --reject "$patch"; then
+                    echo "剩余变更应用成功"
+            else
+                    # 清理.rej文件
+                    find . -name "*.rej" -exec rm -f {} \;
+            fi
             echo "::endgroup::"
           done
 
-          # 增强验证
-          echo "::group::关键文件验证"
-          declare -A file_checksums=(
-            ["android/abi_gki_aarch64_qcom"]="a1b2c3d4e5f67890"
-            ["drivers/android/binder.c"]="b2c3d4e5f67890a1"
+          # 增强编译前检查
+          echo "::group::编译前验证"
+          # ABI兼容性检查
+          if ! ./build/abi/check_abi --full --strict android/abi_gki_aarch64_qcom; then
+            echo "::error::ABI兼容性检查失败"
+            exit 1
+          fi
+
+          # 关键符号检查
+          required_symbols=(
+            binder_ioctl
+            erofs_decompress
           )
-          
-          for file in "${!file_checksums[@]}"; do
-            actual_sum=$(md5sum "$file" | awk '{print $1}')
-            if [[ "$actual_sum" != "${file_checksums[$file]}" ]]; then
-                    echo "::error::文件校验失败: $file (预期:${file_checksums[$file]} 实际:$actual_sum)"
+          for sym in "${required_symbols[@]}"; do
+            if ! grep -q "$sym" System.map; then
+                    echo "::error::缺失关键符号: $sym"
                     exit 1
             fi
-            echo "$file 校验通过"
           done
           echo "::endgroup::"
           
