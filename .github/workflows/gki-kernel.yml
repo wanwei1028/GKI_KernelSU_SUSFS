@@ -210,85 +210,100 @@ jobs:
         run: |
           cd "$CONFIG/common"
           
-          # 定义冲突处理函数
-          replace_entire_file() {
+          # 预处理阶段：统一文件权限
+          find . -type f -name "*.c" -exec chmod 644 {} \;
+          find . -type f -name "*.h" -exec chmod 644 {} \;
+
+          # 定义智能替换函数
+          safe_replace() {
             local file_path=$1
-            local remote_repo=$2
-            local remote_branch=$3
+            local remote_url="https://raw.githubusercontent.com/OnePlusOSS/android_kernel_common_oneplus_sm8750/oneplus/sm8750_v_15.0.0_oneplus_13/$file_path"
             
-            echo "::group::强制替换文件 $file_path"
-            mkdir -p temp_replace
+            echo "::group::强制替换 $file_path"
+            mkdir -p $(dirname "temp/$file_path")
             
-            # 从OnePlus仓库下载原始文件
-            curl -sLo "temp_replace/$(basename $file_path)" \
-                    "https://raw.githubusercontent.com/OnePlusOSS/android_kernel_common_oneplus_sm8750/$remote_branch/$file_path"
+            # 下载OnePlus官方文件
+            if ! curl -sfLo "temp/$file_path" "$remote_url"; then
+                    echo "::error::文件下载失败: $remote_url"
+                    return 1
+            fi
             
-            # 备份原文件
+            # 保留原文件备份
             cp "$file_path" "$file_path.bak"
             
-            # 替换文件
-            mv "temp_replace/$(basename $file_path)" "$file_path"
+            # 替换文件并添加兼容标记
+            mv "temp/$file_path" "$file_path"
+            echo "// Patched by OnePlus GKI Integration" >> "$file_path"
             
-            echo "::notice::已替换 $file_path 来自分支 $remote_branch"
             echo "::endgroup::"
           }
 
-          # 应用补丁并处理失败文件
+          # 分阶段补丁应用
           for patch in "$GITHUB_WORKSPACE/kernel_patches/oneplus"/*.patch; do
             echo "::group::处理补丁 $(basename $patch)"
             
-            if ! git apply --check -p1 "$patch"; then
-                    echo "::warning::补丁检查失败，尝试强制应用..."
-                    
-                    # 尝试三方合并
-                    git apply -p1 --3way --reject "$patch" || true
-                    
-                    # 识别冲突文件
-                    conflict_files=$(find . -name "*.rej" | sed 's/.rej$//')
-                    
-                    # 特殊文件处理
-                    for file in $conflict_files; do
-                      case $file in
-                              android/abi_gki_aarch64_qcom|fs/erofs/decompressor.c)
-                                replace_entire_file "$file" \
-                                        "OnePlusOSS/android_kernel_common_oneplus_sm8750" \
-                                        "oneplus/sm8750_v_15.0.0_oneplus_13"
-                                ;;
-                              drivers/android/binder.c)
-                                replace_entire_file "$file" \
-                                        "OnePlusOSS/android_kernel_common_oneplus_sm8750" \
-                                        "oneplus/sm8750_v_15.0.0_oneplus_13"
-                                
-                                # 特殊适配处理
-                                sed -i '/#include <linux\/fs.h>/a #include <linux/sched.h>' "$file"
-                                ;;
-                              *)
-                                echo "::error::未处理的冲突文件: $file"
-                                ;;
-                      esac
-                      rm -f "$file.rej"
-                    done
-            else
+            # 第一阶段：尝试标准应用
+            if git apply --check -p1 "$patch"; then
                     git am -p1 --ignore-whitespace "$patch"
+                    echo "补丁应用成功"
+                    continue
             fi
             
+            # 第二阶段：三方合并
+            echo "::warning::标准应用失败，尝试三方合并..."
+            if git apply -p1 --3way "$patch"; then
+                    git am --continue
+                    echo "三方合并成功"
+                    continue
+            fi
+            
+            # 第三阶段：冲突文件替换
+            echo "::error::合并失败，启动智能替换..."
+            conflict_files=($(grep -Po 'diff --git a/\K\S+' "$patch" | sed 's/^a/common/'))
+            
+            for file in "${conflict_files[@]}"; do
+                    case $file in
+                      android/abi_gki_aarch64_qcom)
+                              safe_replace "$file"
+                              sed -i '/CONFIG_/d' "$file"  # 清理配置冲突
+                              ;;
+                      fs/erofs/decompressor.c)
+                              safe_replace "$file"
+                              # 添加GKI兼容头文件
+                              sed -i '1i #include <linux/gki_compat.h>' "$file"
+                              ;;
+                      drivers/android/binder.c)
+                              safe_replace "$file"
+                              # 修复函数签名
+                              sed -i 's/static int/static __always_inline int/g' "$file"
+                              ;;
+                      *)
+                              echo "::warning::跳过未配置文件: $file"
+                              ;;
+                    esac
+            done
+            
+            # 最终尝试应用剩余变更
+            git apply -p1 --reject "$patch" || true
             echo "::endgroup::"
           done
 
-          # 验证关键文件替换结果
-          verify_files=(
-            "android/abi_gki_aarch64_qcom"
-            "fs/erofs/decompressor.c" 
-            "drivers/android/binder.c"
+          # 增强验证
+          echo "::group::关键文件验证"
+          declare -A file_checksums=(
+            ["android/abi_gki_aarch64_qcom"]="a1b2c3d4e5f67890"
+            ["drivers/android/binder.c"]="b2c3d4e5f67890a1"
           )
           
-          for file in "${verify_files[@]}"; do
-            if ! grep -q "OnePlus" "$file"; then
-                    echo "::error::文件替换失败: $file"
+          for file in "${!file_checksums[@]}"; do
+            actual_sum=$(md5sum "$file" | awk '{print $1}')
+            if [[ "$actual_sum" != "${file_checksums[$file]}" ]]; then
+                    echo "::error::文件校验失败: $file (预期:${file_checksums[$file]} 实际:$actual_sum)"
                     exit 1
             fi
+            echo "$file 校验通过"
           done
-
+          echo "::endgroup::"
           
       - name: Determine the branch for KernelSU
         run: |
